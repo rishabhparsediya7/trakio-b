@@ -1,13 +1,43 @@
 import jwt from "jsonwebtoken"
 import bcrypt from "bcrypt"
+import crypto from "crypto"
 import { sendSignupEmail, sendForgotPasswordEmail } from "../utils/sendMail"
 import { db } from "../db/index"
-import { users, otpTransactions } from "../db/schema"
+import { users, otpTransactions, refreshTokens } from "../db/schema"
 import { eq, desc, and } from "drizzle-orm"
 
 const JWT_SECRET = (process.env.JWT_SECRET as string) || "secret"
-const JWT_EXPIRATION_MINUTES =
-  parseInt(process.env.JWT_EXPIRATION_MINUTES || "60") * 60
+// Short-lived access token (seconds). Default 15 minutes.
+const ACCESS_TOKEN_EXPIRY_SECONDS = parseInt(
+  process.env.JWT_ACCESS_EXPIRY_SECONDS || "900"
+)
+// Long-lived refresh token (days). Default 30 days.
+const REFRESH_TOKEN_EXPIRY_DAYS = parseInt(
+  process.env.JWT_REFRESH_EXPIRY_DAYS || "30"
+)
+
+const hashToken = (token: string) =>
+  crypto.createHash("sha256").update(token).digest("hex")
+
+/**
+ * Issues a short-lived JWT access token plus a rotating opaque refresh token.
+ * The refresh token is stored hashed so a DB leak can't be replayed.
+ */
+async function issueTokens(userId: string) {
+  const token = jwt.sign({ userId }, JWT_SECRET, {
+    expiresIn: ACCESS_TOKEN_EXPIRY_SECONDS,
+  })
+  const refreshToken = crypto.randomBytes(48).toString("hex")
+  const expiresAt = new Date(
+    Date.now() + REFRESH_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000
+  )
+  await db.insert(refreshTokens).values({
+    userId,
+    tokenHash: hashToken(refreshToken),
+    expiresAt: expiresAt.toISOString(),
+  })
+  return { token, refreshToken }
+}
 
 class AuthService {
   async signup(
@@ -60,14 +90,12 @@ class AuthService {
       })
 
       const userId = result[0]?.id
-      const token = jwt.sign({ userId }, JWT_SECRET, {
-        expiresIn: JWT_EXPIRATION_MINUTES,
-      })
+      const tokens = await issueTokens(userId)
 
       return {
         success: true,
         message: "User Entry created",
-        token,
+        ...tokens,
         userId,
       }
     } catch (error) {
@@ -87,23 +115,19 @@ class AuthService {
     profilePicture: string
   ) {
     try {
-      let token = ""
-
       const isUserExist = await db
         .select()
         .from(users)
         .where(eq(users.email, email))
 
       if (isUserExist.length > 0) {
-        token = jwt.sign({ userId: isUserExist[0]?.id }, JWT_SECRET, {
-          expiresIn: JWT_EXPIRATION_MINUTES,
-        })
+        const tokens = await issueTokens(isUserExist[0]?.id)
 
         return {
           success: true,
           message: "Login successful",
           name: firstName + " " + lastName,
-          token,
+          ...tokens,
           userId: isUserExist[0]?.id,
           photoUrl: profilePicture,
           email: email,
@@ -124,14 +148,12 @@ class AuthService {
         .returning({ id: users.id })
 
       const userId = result[0]?.id
-      token = jwt.sign({ userId }, JWT_SECRET, {
-        expiresIn: JWT_EXPIRATION_MINUTES,
-      })
+      const tokens = await issueTokens(userId)
 
       return {
         success: true,
         message: "User Entry created",
-        token,
+        ...tokens,
         name: firstName + " " + lastName,
         userId,
         photoUrl: profilePicture,
@@ -169,15 +191,13 @@ class AuthService {
         }
       }
 
-      const token = jwt.sign({ userId: user.id }, JWT_SECRET, {
-        expiresIn: JWT_EXPIRATION_MINUTES,
-      })
+      const tokens = await issueTokens(user.id)
 
       return {
         success: true,
         message: "Login successful",
         name: user.firstName + " " + user.lastName,
-        token,
+        ...tokens,
         userId: user.id,
       }
     } catch (error) {
@@ -269,11 +289,13 @@ class AuthService {
 
       const user = updateResult[0]
 
-      const token = jwt.sign({ userId: user.id }, JWT_SECRET, {
-        expiresIn: JWT_EXPIRATION_MINUTES,
-      })
+      const tokens = await issueTokens(user.id)
 
-      return { success: true, message: "Email verified successfully", token }
+      return {
+        success: true,
+        message: "Email verified successfully",
+        ...tokens,
+      }
     } catch (error) {
       console.log("🚀 ~ AuthServices ~ verifyOTP ~ error:", error)
       return { success: false, message: "Failed to verify OTP" }
@@ -365,6 +387,63 @@ class AuthService {
     } catch (error) {
       console.log("🚀 ~ AuthServices ~ resetPassword ~ error:", error)
       return { success: false, message: "Failed to reset password" }
+    }
+  }
+
+  /**
+   * Validates a refresh token, rotates it (revokes old, issues new), and
+   * returns a fresh access + refresh token pair.
+   */
+  async refreshAccessToken(refreshToken: string) {
+    try {
+      if (!refreshToken) {
+        return { success: false, message: "Refresh token required" }
+      }
+      const tokenHash = hashToken(refreshToken)
+      const rows = await db
+        .select()
+        .from(refreshTokens)
+        .where(eq(refreshTokens.tokenHash, tokenHash))
+        .limit(1)
+
+      if (rows.length === 0) {
+        return { success: false, message: "Invalid refresh token" }
+      }
+      const stored = rows[0]
+      if (stored.revokedAt) {
+        return { success: false, message: "Refresh token revoked" }
+      }
+      if (new Date() > new Date(stored.expiresAt)) {
+        return { success: false, message: "Refresh token expired" }
+      }
+
+      // Rotate: revoke the used token and issue a fresh pair.
+      await db
+        .update(refreshTokens)
+        .set({ revokedAt: new Date().toISOString() })
+        .where(eq(refreshTokens.id, stored.id))
+
+      const tokens = await issueTokens(stored.userId)
+      return { success: true, ...tokens, userId: stored.userId }
+    } catch (error) {
+      console.log("🚀 ~ AuthServices ~ refreshAccessToken ~ error:", error)
+      return { success: false, message: "Failed to refresh token" }
+    }
+  }
+
+  /** Revokes a refresh token (logout). Idempotent. */
+  async revokeRefreshToken(refreshToken: string) {
+    try {
+      if (refreshToken) {
+        await db
+          .update(refreshTokens)
+          .set({ revokedAt: new Date().toISOString() })
+          .where(eq(refreshTokens.tokenHash, hashToken(refreshToken)))
+      }
+      return { success: true, message: "Logged out" }
+    } catch (error) {
+      console.log("🚀 ~ AuthServices ~ revokeRefreshToken ~ error:", error)
+      return { success: false, message: "Failed to logout" }
     }
   }
 }

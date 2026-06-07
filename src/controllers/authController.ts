@@ -139,3 +139,23 @@ export const resetPassword = async (req: Request, res: Response) => {
     res.status(400).json(response)
   }
 }
+
+export const refreshToken = async (req: Request, res: Response) => {
+  const { refreshToken } = req.body
+  if (!refreshToken) {
+    return res.status(400).json({ success: false, message: "Refresh token is required" })
+  }
+  const response = await AuthService.refreshAccessToken(refreshToken)
+  if (response.success) {
+    res.status(200).json(response)
+  } else {
+    // 401 so the client treats it as "session over" and routes to login.
+    res.status(401).json(response)
+  }
+}
+
+export const logout = async (req: Request, res: Response) => {
+  const { refreshToken } = req.body
+  const response = await AuthService.revokeRefreshToken(refreshToken)
+  res.status(200).json(response)
+}

@@ -581,3 +581,27 @@ export const activityLogs = pgTable(
     }).onDelete("cascade"),
   ]
 )
+
+// ======================================
+// Refresh Tokens Table (rotating refresh tokens for auth)
+// ======================================
+
+export const refreshTokens = pgTable(
+  "refreshTokens",
+  {
+    id: uuid().defaultRandom().primaryKey().notNull(),
+    userId: uuid("userId").notNull(),
+    tokenHash: varchar({ length: 64 }).notNull(), // sha256 hex of the refresh token
+    expiresAt: timestamp({ withTimezone: true, mode: "string" }).notNull(),
+    createdAt: timestamp({ withTimezone: true, mode: "string" }).defaultNow(),
+    revokedAt: timestamp({ withTimezone: true, mode: "string" }),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.userId],
+      foreignColumns: [users.id],
+      name: "refreshTokens_userId_fkey",
+    }).onDelete("cascade"),
+    unique("refreshTokens_tokenHash_key").on(table.tokenHash),
+  ]
+)
