@@ -55,7 +55,9 @@ class AuthService {
         .from(users)
         .where(eq(users.email, email))
 
-      if (isUserExist.length > 0) {
+      const existing = isUserExist[0]
+      // A fully-registered account already owns this email.
+      if (existing && !existing.isPlaceholder) {
         return {
           success: false,
           message: "User already exists",
@@ -65,16 +67,33 @@ class AuthService {
       const otp = Math.floor(100000 + Math.random() * 900000).toString()
       await sendSignupEmail({ email, otp })
 
-      const result = await db
-        .insert(users)
-        .values({
-          email,
-          firstName,
-          lastName,
-          passwordHash,
-          provider: "email",
-        })
-        .returning({ id: users.id })
+      let userId: string | undefined
+      if (existing && existing.isPlaceholder) {
+        // Claim the placeholder in place so accrued balances/expenses carry over.
+        await db
+          .update(users)
+          .set({
+            firstName,
+            lastName,
+            passwordHash,
+            provider: "email",
+            isPlaceholder: false,
+          })
+          .where(eq(users.id, existing.id))
+        userId = existing.id
+      } else {
+        const result = await db
+          .insert(users)
+          .values({
+            email,
+            firstName,
+            lastName,
+            passwordHash,
+            provider: "email",
+          })
+          .returning({ id: users.id })
+        userId = result[0]?.id
+      }
 
       const expiresAt = new Date()
       expiresAt.setMinutes(
@@ -89,8 +108,7 @@ class AuthService {
         expiresAt: expiresAt.toISOString(),
       })
 
-      const userId = result[0]?.id
-      const tokens = await issueTokens(userId)
+      const tokens = await issueTokens(userId as string)
 
       return {
         success: true,
@@ -121,14 +139,29 @@ class AuthService {
         .where(eq(users.email, email))
 
       if (isUserExist.length > 0) {
-        const tokens = await issueTokens(isUserExist[0]?.id)
+        const existing = isUserExist[0]
+        if (existing.isPlaceholder) {
+          // Claim the placeholder in place so accrued balances/expenses carry over.
+          await db
+            .update(users)
+            .set({
+              firstName,
+              lastName,
+              profilePicture,
+              provider: "google",
+              isEmailVerified: true,
+              isPlaceholder: false,
+            })
+            .where(eq(users.id, existing.id))
+        }
+        const tokens = await issueTokens(existing.id)
 
         return {
           success: true,
           message: "Login successful",
           name: firstName + " " + lastName,
           ...tokens,
-          userId: isUserExist[0]?.id,
+          userId: existing.id,
           photoUrl: profilePicture,
           email: email,
         }

@@ -101,3 +101,18 @@ export const searchUsers = async (req: Request, res: Response) => {
     res.status(500).json(response)
   }
 }
+
+export const resolveContact = async (req: Request, res: Response) => {
+  const userId = req?.userId
+  if (!userId) {
+    return res.status(401).json({ error: "Unauthorized" })
+  }
+
+  const { name, email, phone } = req.body
+  const response = await UsersService.resolveContact({ name, email, phone })
+  if (response.success) {
+    res.status(200).json(response)
+  } else {
+    res.status(400).json(response)
+  }
+}

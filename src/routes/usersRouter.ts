@@ -6,6 +6,7 @@ import {
   uploadProfilePic,
   updateProfile,
   searchUsers,
+  resolveContact,
 } from "../controllers/usersController"
 import authenticateJWT from "../middlewares/authenticate"
 
@@ -18,6 +19,7 @@ userRouter.get("/me", getUserById)
 
 userRouter.put("/update-profile", updateProfile)
 userRouter.get("/search", searchUsers)
+userRouter.post("/resolve-contact", resolveContact)
 
 // POST /upload-profile-pic
 // Cast to RequestHandler to fix type mismatch between multer and express types

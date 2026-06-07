@@ -175,6 +175,7 @@ class UsersService {
         .where(
           and(
             ne(users.id, currentUserId),
+            eq(users.isPlaceholder, false),
             or(
               ilike(users.email, `%${query}%`),
               ilike(users.phoneNumber, `%${query}%`)
@@ -193,6 +194,79 @@ class UsersService {
         success: false,
         message: (error as Error).message,
       }
+    }
+  }
+
+  /**
+   * Resolve a contact to a user id for splitting: returns an existing
+   * user/placeholder (matched by email, or phone as a dedupe hint), or creates
+   * a new placeholder. Email is required — it's the (free) invite + claim key.
+   */
+  async resolveContact(params: {
+    name?: string
+    email?: string
+    phone?: string
+  }) {
+    try {
+      const email = params.email?.trim().toLowerCase() || ""
+      const phone = params.phone?.trim() || ""
+
+      if (!email) {
+        return { success: false, message: "Email is required to invite someone" }
+      }
+
+      // Match an existing user or placeholder by email, or by phone if given.
+      const matchers = [eq(users.email, email)]
+      if (phone) matchers.push(eq(users.phoneNumber, phone))
+
+      const existing = await db
+        .select({
+          id: users.id,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          email: users.email,
+          phoneNumber: users.phoneNumber,
+          profilePicture: users.profilePicture,
+          isPlaceholder: users.isPlaceholder,
+        })
+        .from(users)
+        .where(or(...matchers))
+        .limit(1)
+
+      if (existing.length > 0) {
+        return { success: true, isNew: false, user: existing[0] }
+      }
+
+      // Create a placeholder for the not-yet-registered person.
+      const nameParts = (params.name || "").trim().split(" ").filter(Boolean)
+      const firstName = nameParts[0] || email.split("@")[0]
+      const lastName = nameParts.slice(1).join(" ")
+
+      const created = await db
+        .insert(users)
+        .values({
+          firstName,
+          lastName,
+          email,
+          phoneNumber: phone || null,
+          passwordHash: "",
+          provider: "invited",
+          isPlaceholder: true,
+        })
+        .returning({
+          id: users.id,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          email: users.email,
+          phoneNumber: users.phoneNumber,
+          profilePicture: users.profilePicture,
+          isPlaceholder: users.isPlaceholder,
+        })
+
+      return { success: true, isNew: true, user: created[0] }
+    } catch (error) {
+      console.log("🚀 ~ UsersService ~ resolveContact ~ error:", error)
+      return { success: false, message: (error as Error).message }
     }
   }
 }

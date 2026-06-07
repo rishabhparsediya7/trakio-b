@@ -78,6 +78,35 @@ export const sendForgotPasswordEmail = async ({
   })
 }
 
+export const sendSplitInviteEmail = async ({
+  email,
+  inviterName,
+  description,
+  appUrl,
+}: {
+  email: string
+  inviterName: string
+  description: string
+  appUrl: string
+}) => {
+  const transporter = createTransporter()
+  const html = `
+    <div style="font-family: -apple-system, Segoe UI, Roboto, sans-serif; max-width: 480px; margin: 0 auto; color: #111;">
+      <h2 style="color:#4F46E5;">${inviterName} added you to a shared expense on Trakio</h2>
+      <p style="font-size:16px;">"${description}"</p>
+      <p style="font-size:15px; color:#444;">Trakio is where friends split bills and settle up. Download the app to see what you owe and settle when you're ready.</p>
+      <a href="${appUrl}" style="display:inline-block; margin-top:12px; background:#6366F1; color:#fff; padding:12px 20px; border-radius:10px; text-decoration:none; font-weight:600;">Open Trakio</a>
+      <p style="font-size:12px; color:#999; margin-top:24px;">If you didn't expect this, you can ignore this email.</p>
+    </div>`
+  return transporter.sendMail({
+    from: `Trakio <${process.env.TRANSPORT_EMAIL}>`,
+    to: email,
+    subject: `${inviterName} added you to a split on Trakio`,
+    text: convert(html),
+    html,
+  })
+}
+
 export const sendVerificationEmail = async ({
   email,
   verificationCode,

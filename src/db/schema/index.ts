@@ -45,6 +45,9 @@ export const users = pgTable(
     profilePicture: text(),
     provider: text(),
     isPremium: boolean().default(false).notNull(),
+    // True for invited-but-not-registered users (created when someone splits
+    // with a person who isn't on the app yet). Claimed on signup.
+    isPlaceholder: boolean().default(false).notNull(),
   },
   (table) => [unique("users_email_key").on(table.email)]
 )

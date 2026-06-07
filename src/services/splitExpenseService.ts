@@ -7,6 +7,7 @@ import {
   users,
 } from "../db/schema"
 import { eq, and, or, ne, sql, desc, inArray } from "drizzle-orm"
+import { sendSplitInviteEmail } from "../utils/sendMail"
 
 interface CreateSplitExpenseParams {
   createdBy: string
@@ -80,6 +81,15 @@ class SplitExpenseService {
         }
       }
 
+      // Best-effort: email anyone who isn't on Trakio yet (placeholders).
+      this.notifyPlaceholderParticipants(
+        createdBy,
+        description,
+        participants.map((p) => p.userId)
+      ).catch((e) =>
+        console.log("notifyPlaceholderParticipants error (non-fatal):", e)
+      )
+
       return {
         success: true,
         data: {
@@ -97,6 +107,48 @@ class SplitExpenseService {
             : "Failed to create split expense",
       }
     }
+  }
+
+  /**
+   * Emails any participants who aren't registered yet (placeholders) to invite
+   * them to Trakio. Best-effort — never throws into the create path.
+   */
+  private async notifyPlaceholderParticipants(
+    createdBy: string,
+    description: string,
+    participantIds: string[]
+  ) {
+    if (participantIds.length === 0) return
+
+    const placeholders = await db
+      .select({ email: users.email })
+      .from(users)
+      .where(
+        and(inArray(users.id, participantIds), eq(users.isPlaceholder, true))
+      )
+    if (placeholders.length === 0) return
+
+    const [inviter] = await db
+      .select({ firstName: users.firstName, lastName: users.lastName })
+      .from(users)
+      .where(eq(users.id, createdBy))
+    const inviterName = inviter
+      ? `${inviter.firstName} ${inviter.lastName}`.trim()
+      : "Someone"
+    const appUrl = process.env.APP_INVITE_URL || "https://trakio.app"
+
+    await Promise.all(
+      placeholders
+        .filter((p) => p.email)
+        .map((p) =>
+          sendSplitInviteEmail({
+            email: p.email as string,
+            inviterName,
+            description,
+            appUrl,
+          }).catch((e) => console.log("invite email failed:", e))
+        )
+    )
   }
 
   /**
