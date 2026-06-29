@@ -108,6 +108,7 @@ class ActivityService {
           isRead: activityLogs.isRead,
           createdAt: activityLogs.createdAt,
           actorName: sql<string>`(SELECT "firstName" || ' ' || "lastName" FROM users WHERE id = ${activityLogs.userId})`,
+          actorProfilePicture: sql<string>`(SELECT "profilePicture" FROM users WHERE id = ${activityLogs.userId})`,
         })
         .from(activityLogs)
         .where(
@@ -119,6 +120,9 @@ class ActivityService {
         .orderBy(desc(activityLogs.createdAt))
         .limit(limit)
         .offset(offset)
+
+      
+      console.log('activities', activities);
 
       return { success: true, data: activities }
     } catch (error) {
